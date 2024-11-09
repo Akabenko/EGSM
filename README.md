@@ -7,14 +7,14 @@
 
 
 
-### EGSM
+## EGSM
 A module that enhances gmod with a thing that was asked for decades
 
 * [Examples](https://github.com/devonium/EGSM/wiki/example_shaders)
 * [Documentation](https://github.com/devonium/EGSM/wiki)
 * [Discord](https://discord.gg/X2Ay3cgW8T)
 
-### How to compile
+## How to compile
 [garrysmod_common](https://github.com/danielga/garrysmod_common)
 ```
 git clone --recursive https://github.com/danielga/garrysmod_common
