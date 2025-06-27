@@ -16,15 +16,19 @@
 #include "version.h"
 #include "Windows.h"
 
+#include <scanning/symbolfinder.hpp>
+
+static SymbolFinder SymFinder;
+
 using namespace GarrysMod::Lua;
 
 void ExposeVersion(ILuaBase* LUA)
 {
 	LUA->PushSpecial(SPECIAL_GLOB);
-		LUA->CreateTable();
-		LUA->PushNumber(EGSM_VERSION);
-		LUA->SetField(-2, "Version");
-		LUA->SetField(-2, "EGSM");
+	LUA->CreateTable();
+	LUA->PushNumber(EGSM_VERSION);
+	LUA->SetField(-2, "Version");
+	LUA->SetField(-2, "EGSM");
 	LUA->Pop();
 }
 
@@ -62,7 +66,7 @@ void CL_Init(ILuaBase* LUA)
 
 	auto lua_shared = GetModuleHandle("lua_shared.dll");
 	if (!lua_shared) { ShaderLibError("lua_shared.dll == NULL\n"); }
-		
+
 	luaL__loadbufferex luaL__loadbufferfex = (luaL__loadbufferex)GetProcAddress(lua_shared, "luaL_loadbufferx");
 	if (luaL__loadbufferfex(LUA->GetState(), depthpass_lua, sizeof(depthpass_lua) - 1, "", NULL))
 	{
@@ -99,8 +103,9 @@ void CL_Deinit(ILuaBase* LUA)
 	ShaderLib::LuaDeinit(LUA);
 }
 
-typedef int32_t		(*lua_initcl)();
-typedef lua_State*  (*luaL_newstate)();
+// Обновлено соглашение о вызове для корректной работы хука
+typedef int32_t(__thiscall* lua_initcl)(void*);
+typedef lua_State* (*luaL_newstate)();
 typedef void		(*luaL_closestate)(lua_State*);
 
 Detouring::Hook lua_initcl_hk;
@@ -111,10 +116,19 @@ Detouring::Hook luaL_closestate_hk;
 extern lua_State* g_pClientLua = NULL;
 extern lua_State* g_pMenuLua = NULL;
 
-int32_t lua_initcl_detour()
+/*
+* Обновлено соглашение о вызове для корректной передачи указателя this, так как данный метод является членом класса.
+* Добавлен второй аргумент для совместимости с x86 архитектурой
+*/
+int32_t __fastcall lua_initcl_detour(
+	void* __this
+#ifndef _WIN64
+	, void*
+#endif
+)
 {
 	luaL_newstate_hk.Enable();
-	int32_t ret = lua_initcl_hk.GetTrampoline<lua_initcl>()();
+	int32_t ret = lua_initcl_hk.GetTrampoline<lua_initcl>()(__this);
 	luaL_newstate_hk.Disable();
 	lua_loadbufferex_hk.Disable();
 
@@ -123,7 +137,7 @@ int32_t lua_initcl_detour()
 	CL_PostInit(LUA);
 
 	return ret;
-}
+};
 
 lua_State* luaL_newstate_detour()
 {
@@ -159,67 +173,107 @@ void luaL_closestate_detour(lua_State* L)
 	luaL_closestate_hk.GetTrampoline<luaL_closestate>()(L);
 }
 
-
 GMOD_MODULE_OPEN()
 {
 	g_pMenuLua = LUA->GetState();
-	static Color msgc(100, 255, 100, 255);
+
+	Color msgc(100, 255, 100, 255);
 	ConColorMsg(msgc, "-----EGSM Loading-----\n");
 	Menu_Init(LUA);
 
-	auto lua_shared = GetModuleHandle("lua_shared.dll");
-	if (!lua_shared) { ShaderLibError("lua_shared.dll == NULL\n"); }
+	/*
+	* Реализация фабричных загрузчиков для упрощения работы с модулями игры.
+	* Удобно и упрощает управление ресурсами.
+	*/
+	SourceSDK::FactoryLoader lua_shared_loader("lua_shared");
+	SourceSDK::FactoryLoader client_loader("client");
 
-	auto client = GetModuleHandle("client.dll");
-	if (!client) { ShaderLibError("client.dll == NULL\n");}
-
-	void* luaL_newstatef = GetProcAddress(lua_shared, "luaL_newstate");
+	/*
+	* Добавлена логика для безопасного завершения работы модуля в случае сбоя, чтобы избежать критических ошибок в игре.
+	* Убраны излишние локальные области видимости и заменены на более стабильное решение, упрощающее управление ресурсами.
+	*/
+	auto luaL_newstate_p = SymFinder.FindSymbol(lua_shared_loader.GetModule(), "luaL_newstate");
+	if (!luaL_newstate_hk.Create(
+		reinterpret_cast<void*>(luaL_newstate_p),
+		reinterpret_cast<void*>(&luaL_newstate_detour)
+	))
 	{
-		Detouring::Hook::Target target(luaL_newstatef);
-		luaL_newstate_hk.Create(target, luaL_newstate_detour);
-	}
+		LUA->ThrowError("unable to create detour for luaL_newstate");
+	};
 
-	void* luaL__loadbufferfex = GetProcAddress(lua_shared, "luaL_loadbufferx");
+	auto luaL_loadbufferx_p = SymFinder.FindSymbol(lua_shared_loader.GetModule(), "luaL_loadbufferx");
+	if (!lua_loadbufferex_hk.Create(
+		reinterpret_cast<void*>(luaL_loadbufferx_p),
+		reinterpret_cast<void*>(&luaL_loadbufferex_detour)
+	))
 	{
-		Detouring::Hook::Target target(luaL__loadbufferfex);
-		lua_loadbufferex_hk.Create(target, luaL_loadbufferex_detour);
-	}
+		LUA->ThrowError("unable to create detour for luaL_loadbufferx");
+	};
 
-	void* luaL_closestatef = GetProcAddress(lua_shared, "lua_close");
+	auto lua_close_p = SymFinder.FindSymbol(lua_shared_loader.GetModule(), "lua_close");
+	if (!luaL_closestate_hk.Create(
+		reinterpret_cast<void*>(lua_close_p),
+		reinterpret_cast<void*>(&luaL_closestate_detour)
+	))
 	{
-		Detouring::Hook::Target target(luaL_closestatef);
-		luaL_closestate_hk.Create(target, luaL_closestate_detour);
-		luaL_closestate_hk.Enable();
-	}
-	const char lua_initclf_sign[] =
-		HOOK_SIGN_CHROMIUM_x32("55 8B EC 81 EC 18 02 00 00 53 68 ? ? ? ? 8B D9 FF 15 ? ? ? ? 83 C4 04 E8 ? ? ? ? 68 ? ? ? ? 51 8B C8 C7 04 24 33 33 73 3F 8B 10 FF 52 6C 83 3D ? ? ? ? ? 74 0E 68 ? ? ? ? FF 15 ? ? ? ? 83 C4 04 68 04 02 08 00 E8 ? ? ? ? 83 C4 04 85 C0 74 09 8B C8 E8 ? ? ? ? EB 02 33 C0 56 57 A3 ? ? ? ? E8 ? ? ? ? 6A 00 6A 00 8B C8 8B 10 FF 52 10 A3 ? ? ? ? FF 15 ? ? ? ? 8B ? ? ? ? ? 68")
-		HOOK_SIGN_CHROMIUM_x64("48 89 5C 24 08 48 89 74 24 10 57 48 81 EC 60 02 00 00 48 8B ? ? ? ? ? 48 33 C4 48 89 84 24 50 02 00 00 48 8B F1 48 8D ? ? ? ? ? FF 15 ? ? ? ? E8 ? ? ? ? F3 0F 10 ? ? ? ? ? 4C 8D ? ? ? ? ? 48 8B C8 48 8B 10 FF 92 D8 00 00 00 48 83 3D ? ? ? ? ? 74 0D 48 8D ? ? ? ? ? FF 15 ? ? ? ? B9 08 02 0C 00 E8 ? ? ? ? 48 85 C0 74 08 48 8B C8 E8 ? ? ? ? 48 89 ? ? ? ? ? E8 ? ? ? ? 45 33")
-		HOOK_SIGN_M("55 8B EC 81 EC 18 02 00 00 53 68 ? ? ? ? 8B D9 FF 15 ? ? ? ? 83 C4 04 E8 ? ? ? ? D9 05 ? ? ? ? 68 ? ? ? ? 51 8B 10 8B C8 D9 1C 24 FF 52 6C 83 3D ? ? ? ? ? 74 0B 68 ? ? ? ? FF 15 ? ? ? ? 68 04 02 08 00 E8 ? ? ? ? 83 C4 04 85 C0 74 09 8B C8 E8 ? ? ? ? EB 02 33 C0 56 57 A3 ? ? ? ? E8 ? ? ? ? 6A 00 6A 00 8B C8 8B 10 FF 52 10 A3 ? ? ? ? FF 15 ? ? ? ? 8B")
+		LUA->ThrowError("unable to create detour for lua_close");
+	};
 
-	auto lua_initclf = ScanSign(client, lua_initclf_sign, sizeof(lua_initclf_sign) - 1);
+	if (!luaL_closestate_hk.Enable())
+	{
+		LUA->ThrowError("unable to enable detour for lua_close");
+	};
 
+	/*
+	* Использование современного STL-контейнера для удобства работы с сигнатурами в связке с SymbolFinder.
+	* Контейнер автоматически освобождает память по завершению жизненного цикла функции.
+	*/
+	const std::vector<uint8_t> lua_initclf_sign
+#ifdef CHROMIUM
+#ifdef ARCHITECTURE_X86_64
+	{
+		0x48, 0x89, 0x5C, 0x24, 0x2A, 0x48, 0x89, 0x74, 0x24, 0x2A, 0x57, 0x48,
+		0x83, 0xEC, 0x2A, 0x48, 0x8B, 0x05, 0x2A, 0x2A, 0x2A, 0x2A, 0x48, 0x33,
+		0xC4, 0x48, 0x89, 0x44, 0x24, 0x2A, 0x48, 0x8B, 0xF1
+	};
+#elif ARCHITECTURE_X86
+	{
+		0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x2A, 0x53, 0x68, 0x2A, 0x2A, 0x2A, 0x2A,
+			0x8B, 0xD9, 0xFF, 0x15
+	};
+#endif
+#else
+	{
+		;
+	};
+#endif
+
+	auto lua_initclf = SymFinder.FindPattern(client_loader.GetModule(), lua_initclf_sign.data(), lua_initclf_sign.size());
 	if (!lua_initclf)
 	{
-		ShaderLibError("lua_initclf == NULL\n");
-	}
+		LUA->ThrowError("failed to dereference lua_initclf");
+	};
 
+	if (!lua_initcl_hk.Create(reinterpret_cast<void*>(lua_initclf), reinterpret_cast<void*>(&lua_initcl_detour)))
 	{
-		Detouring::Hook::Target target(lua_initclf);
-		lua_initcl_hk.Create(target, lua_initcl_detour);
-		lua_initcl_hk.Enable();
-	}
+		LUA->ThrowError("unable to create detour for lua_initclf");
+	};
+
+	if (!lua_initcl_hk.Enable())
+	{
+		LUA->ThrowError("unable to enable detour for lua_initclf");
+	};
 
 	ConColorMsg(msgc, "----------------------\n");
 
-
 	return 0;
-}
+};
 
-GMOD_MODULE_CLOSE( )
+GMOD_MODULE_CLOSE()
 {
 	ShaderLib::MenuDeinit(LUA);
 	return 0;
-}
+};
 
 BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
 {
