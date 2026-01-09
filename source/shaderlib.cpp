@@ -66,6 +66,7 @@ namespace ShaderLib
 	IShaderAPI* g_pShaderApi = NULL;
 	IShaderShadow* g_pShaderShadow = NULL;
 	CShaderSystem* g_pCShaderSystem = NULL;
+	CBaseShader* g_pCBaseShader = NULL;
 	CShaderSystem::ShaderDLLInfo_t* g_pShaderLibDLL = NULL;
 	IDirect3DDevice9* m_pD3DDevice = NULL;
 
@@ -413,7 +414,7 @@ namespace ShaderLib
 				if (!CompileShader(program, programLen, "vs_3_0", &macroDefines.front(), (void**)&cs_output, flags, lineOffset))
 				{
 					if (index != GetVertexShaderDict().InvalidIndex()) { GetVertexShaderDict()[index].m_nDataOffset = 0; }
-					GetVertexShaderDict()[index].m_nDataOffset = 0;
+					//GetVertexShaderDict()[index].m_nDataOffset = 0; //crash
 					ShaderCompilationError(LUA, comboInd, (char*)cs_output, name, (IShaderBuffer**)shaders);
 				}
 				if (!shaders) { shaders = new HardwareShader_t[combosCount]; }
@@ -744,6 +745,8 @@ namespace ShaderLib
 		return 0;
 	}
 
+	#define TFILTER_MODE_POINTSAMPLED  1
+
 	void BindTexture(ShaderUData* u, int sampler, int paramindex, TextureBind::TextureType type, bool isStandardTexture = false, int frameVar = -1)
 	{
 		if (sampler > u->Shader->ActiveSamplers) { u->Shader->ActiveSamplers = sampler; }
@@ -765,9 +768,28 @@ namespace ShaderLib
 		bind->Sampler = sampler;
 		bind->IsStandardTexture = isStandardTexture;
 		bind->FrameVar = frameVar;
+
+		// test SetTextureFilterMode
+		//g_pShaderApi->SetTextureFilterMode(sampler, TFILTER_MODE_POINTSAMPLED);
 		
 		u->Shader->Binds.AddToTail(bind);
 	}
+
+	/*
+	LUA_LIB_FUNCTION(shader_methods, DeleteTexture)
+	{
+		const char* texture_name = LUA->CheckString();
+
+		ShaderAPITextureHandle_t textureHandle;
+
+		textureHandle = g_pCBaseShader->GetShaderAPITextureBindHandle(1, -1, 0);
+
+		if (g_pShaderApi->IsTexture(textureHandle))
+		{
+			g_pShaderApi->DeleteTexture(textureHandle);
+		}
+	}
+	*/
 
 	LUA_LIB_FUNCTION(shader_methods, BindTexture)
 	{
@@ -1367,11 +1389,8 @@ namespace ShaderLib
 
 		{
 			static const char sign[] =
-				// version 2024 summer
-				//HOOK_SIGN_CHROMIUM_x32("55 8B EC 83 EC 1C 53 8B 5D 0C C6 45 FE 00 56 8B F1 89 75 F8 57 8B 46 04 8A 88 50 02 00 00 8B B8 4C 02 00 00 88 4D FF 83 FB 1F 77 17 8B 94 98 54 02 00 00 85 D2 74 0C 8A 8C 18 D4 02 00 00 8B FA 88 4D FF 80 78 24 00 7D 23 85 FF 75 1F F6 40 25 04 8A 7D FE 74 0B")
-				
 				HOOK_SIGN_CHROMIUM_x32("55 8B EC 83 EC 1C 8B C1 C6 45 FE 00 53 8B 5D 0C 89 45 F8 8B 48 04 56 57 8A 91 50 02 00 00 8B B9 4C 02 00 00 88 55 FF 83 FB 1F 77 17 8B B4 99 54 02 00 00 85 F6 74 0C 8A 94 19 D4 02 00 00 8B FE 88 55 FF 80 79 24 00 7D 20 85 FF 75 1C F6 41 25 04 74 0B 8B B8 C0")
-				HOOK_SIGN_CHROMIUM_x64("48 89 54 24 10 48 89 4C 24 08 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 50 48 8B 41 08 45 32 F6 49 63 F0 4D 8B E1 4C 8B EA 4C 8B F9 0F B6 A8 58 02 00 00 48 8B B8 50 02 00 00 40 88 AC 24 A0 00 00 00 83 FE 1F 77 20 4C 8B 84 F0 60 02 00 00 4D 85 C0 74 13 0F B6")
+				HOOK_SIGN_CHROMIUM_x64("48 89 5C 24 08 55 56 57 41 54 41 55 41 56 41 57 48 83 EC 60 48 8B 05 4D F1 09 00 48 33 C4 48 89")
 				HOOK_SIGN_x32("55 8B EC 83 EC 1C 8B C1 C6 45 FE 00 53 8B 5D 0C 89 45 F8 8B 48 04 56 57 8A 91 50 02 00 00 8B B9 4C 02 00 00 88 55 FF 83 FB 1F 77 17 8B B4 99 54 02 00 00 85 F6 74 0C 8A 94 19 D4 02 00 00 8B FE 88 55 FF 80 79 24 00 7D 20 85 FF 75 1C F6 41 25 04 74 0B 8B B8 C0")
 
 				R_StudioSetupSkinAndLighting_decl R_StudioSetupSkinAndLighting = (R_StudioSetupSkinAndLighting_decl)ScanSign(studiorenderdll, sign, sizeof(sign) - 1);
@@ -1383,13 +1402,9 @@ namespace ShaderLib
 
 		{
 			static const char sign[] =
-				//старая версия shaderapi sub_1800330F0
-				//HOOK_SIGN_CHROMIUM_x64("48 8B C4 48 89 58 18 55 56 41 54 41 56 41 57 48 83 EC 60 4D 8B F9 41 8B F0 4C 8B F1 48 85 D2 0F 84 ? ? ? ? 0F 57 C0 4C 8B C2 45 33 E4 66 0F 7F 40 A8 48 8D 50 10 44 89 60 A0 48 81 C1 B0 00 00 00 E8 ? ? ? ? 49 8B 5E 20 0F B7 28 48 85 DB 74 17 66 39 2B 75 09 39 73 04 0F 84 ? ? ? ? 48 8B 5B 48 48")
-				
-				// sub_1800337D0
 				HOOK_SIGN_CHROMIUM_x64("48 89 5C 24 08 48 89 6C 24 18 48 89 74 24 20 57 48 83 EC 60 49 8B E9 41 8B F8 48 8B DA 48 8B F1 48 ? ? ? ? B0 00 00 00 48 8B CA E8 8F 94 00 00 3D C8 00 00 00 0F 8F 9D 00 00 00 48 8B CB E8 0C 8A 00 ? ? ? ? 84 8D 00 00 00 33 C0 48 8D 8E B0 00 00 00 0F 57 C0 48 89 44 24 40 ? ? ? ? 89 44 24 28 48")
-				HOOK_SIGN_CHROMIUM_x32("55 8B EC 83 EC 2C 53 56 8B 75 08 57 8B F9 85 F6 0F 84 88 00 00 00 8B C6 8D 50 01 EB 03 8D 49 00 8A 08 40 84 C9 75 F9 2B C2 3D C8 00 00 00 7F 6E 56 E8 7A F4 FF FF 83 C4 04 84 C0 74 61 8D 4D D4 E8 6B EB FF FF 56 8D 45 0A 50 8D 4F 64 E8 EE 9E 00 00 8D 4F 0C 66 8B 00 66 89 45 D4 8B 45 0C 89 45 D8 8D 45 D4 50 E8 25 04 00 00 8B F0 85 F6 75 1F 8D 45 D4 50 8D 4F 0C E8 93 EC FF FF FF 75 10 8B F0 8B CF 6A 01 56 E8 84 08 00 00 84 C0 74 0E FF 46 1C 8B C6 5F 5E 5B 8B E5 5D C2 0C 00 5F 5E")
-				HOOK_SIGN_x32("55 8B EC 8B 45 08 83 EC 28 56 57 8B F9 85 C0 0F 84 ? ? ? ? 50 8D 45 0A C7 45 EC 00 00 00 00 50 8D 4F 64 C7 45 F0 00 00 00 00 C7 45 E0 00 00 00 00 C7 45 E4 00 00 00 00 C7 45 E8 00 00 00 00 C7 45 FC 00 00 00 00 E8 ? ? ? ? 8B 77 18 8B 4D 0C 89 4D DC 66 8B 00 66 89 45 D8 85 F6 74 11 66 39 06 75 05")
+				HOOK_SIGN_CHROMIUM_x32("8B FF 55 8B EC 83 EC 24 53 56 8B 75 0C 8B CE 57 E8 B5 44 00 00")
+				HOOK_SIGN_x32("55 8B EC 8B 45 08 83 EC 10 8B 40 0C 90 C1 E8 03 A8 01 74 04 B0 01 C9 C3 8B 45 08 53 56 8B 40 0C 90 A8 C0 8B 45 08")
 
 				CShaderManager_CreateVertexShader_decl CShaderManager_CreateVertexShader = (CShaderManager_CreateVertexShader_decl)ScanSign(shaderapidx, sign, sizeof(sign) - 1);
 			if (!CShaderManager_CreateVertexShader) { ShaderLibError("CShaderManager::SetVertexShader == NULL\n"); return 0; }
@@ -1453,7 +1468,9 @@ namespace ShaderLib
 			static const char sign[] =
 				HOOK_SIGN_CHROMIUM_x32("55 8B EC 83 EC 10 56 57 8B 7D 0C 89 4D F0 8A 07 24 E1 0C 21 88 07 8B 45 08 83 38 FF 8B 70 14 0F 84 ? ? ? ? 85 F6 0F 84 ? ? ? ? A1 ? ? ? ? B9 ? ? ? ? FF 50 34 8A 0F F7 D8 1A C0 80 E1 EF 24 10 0A C8 88 0F F6")
 				HOOK_SIGN_M("55 8B EC 83 EC 0C 8B 45 08 56 8B 75 0C 57 89 4D F4 8A 16 80 E2 E1 80 CA 21 88 16 83 38 FF 8B 78 14 0F 84 ? ? ? ? 85 FF 0F 84 ? ? ? ? 8B ? ? ? ? ? 8B 41 48 53 8D 59 48 85 C0 74 19 80 38 00 74 14 8B CB E8 ? ? ? ? 50 E8")
-				HOOK_SIGN_x64("48 89 4C 24 08 56 41 55 41 56 48 83 EC 60 41 0F B6 00 49 8B F0 24 E1 4C 8B EA 0C 21 41 88 00 83 3A FF 4C 8B 72 18 0F 84 ? ? ? ? 4D 85 F6 0F 84 ? ? ? ? 48 8B ? ? ? ? ? 48 8D ? ? ? ? ? FF 50 68 F7 D8 0F B6 06 1A C9 24")
+				
+				HOOK_SIGN_x64("48 89 4C 24 08 56 41 55 41 56 48 83 EC 60 41 C6 00 61 49 8B F0 83 3A FF 4C 8B EA 4C 8B 72 18 0F")
+				//HOOK_SIGN_x64("48 89 4C 24 08 56 41 55 41 56 48 83 EC 60 41 0F B6 00 49 8B F0 24 E1 4C 8B EA 0C 21 41 88 00 83 3A FF 4C 8B 72 18 0F 84 ? ? ? ? 4D 85 F6 0F 84 ? ? ? ? 48 8B ? ? ? ? ? 48 8D ? ? ? ? ? FF 50 68 F7 D8 0F B6 06 1A C9 24")
 			
 			void* CViewRender_DetermineWaterRenderInfo = ScanSign(clientdll, sign, sizeof(sign) - 1);
 			if (!CViewRender_DetermineWaterRenderInfo) { ShaderLibError("CViewRender::DetermineWaterRenderInfo == NULL\n"); return 0; }
@@ -1477,7 +1494,7 @@ namespace ShaderLib
 			static const char sign[] =
 				HOOK_SIGN_CHROMIUM_x32("55 8B EC 56 57 8B F9 8B 4D 08 85 C9 75 14 68 ? ? ? ? FF 15 ? ? ? ? 8B ? ? ? ? ? 83 C4 04 8B 01 FF 90 78 01 00 00 8B 17 8B CF 8B F0 FF 92 2C 03 00 00 3B C6 74 2F 8B 06 8B CE 8B 80 E0 00 00 00 FF D0 84 C0 75 14 8B 06 8B CE FF 90 5C 01 00 00")
 				HOOK_SIGN_x32("55 8B EC 56 57 8B F9 8B 4D 08 85 C9 75 22 39 ? ? ? ? ? 0F 84 ? ? ? ? 68 ? ? ? ? FF 15 ? ? ? ? 8B ? ? ? ? ? 83 C4 04 EB 0D 8B 01 FF 75 0C FF 90 D4 00 00 00 8B F0 8B 06 8B CE 53 FF 90 78 01 00 00 8B D8 8B CB 8B 13 FF 92 E8 00 00 00 85 C0 0F 8F ? ? ? ? 8B")
-				HOOK_SIGN_x64("48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 49 8B F0 48 8B F9 48 85 D2 75 14 48 8D ? ? ? ? ? FF 15 ? ? ? ? 48 8B ? ? ? ? ? 48 8B 02 48 8B CA FF 90 F0 02 00 00 48 8B 17 48 8B CF 48 8B D8 FF 92 58 06 00 00 48 3B C3 74 37 48 8B 13 48 8B CB FF 92 C0 01 00")
+				HOOK_SIGN_x64("48 89 5C 24 08 48 89 74 24 10 57 48 83 EC 20 49 8B C0 49 63 F1 49 8B D8 48 8B FA 49 FF C8 4C 03")
 
 				void* Bind = ScanSign(materialsystemdll, sign, sizeof(sign) - 1);
 			if (!Bind) { ShaderLibError("CMatRenderContextBase::Bind == NULL\n"); return 0; }
