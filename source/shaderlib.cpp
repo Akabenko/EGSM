@@ -177,6 +177,37 @@ namespace ShaderLib
 		return 0;
 	}
 
+	LUA_LIB_FUNCTION(shaderlib, PushRenderTargetAndViewport)
+	{
+		CMatRenderContextPtr pRenderContext(g_pMaterialSystem);
+	
+		const char* name_color = LUA->GetString(1); // color tex
+		ITexture* color_tex = g_pMaterialSystem->FindTexture(name_color, TEXTURE_GROUP_RENDER_TARGET);
+		if (!color_tex || color_tex->IsError()) { LUA->ThrowError("provided color texture doens't exist"); }
+		if (!color_tex->IsRenderTarget()) { LUA->ThrowError("provided color texture is not a render target"); }
+	
+		const char* name_depth = LUA->GetString(2); // depth tex
+		ITexture* depth_tex = g_pMaterialSystem->FindTexture(name_depth, TEXTURE_GROUP_RENDER_TARGET);
+		if (!depth_tex || depth_tex->IsError()) { LUA->ThrowError("provided depth texture doens't exist"); }
+		if (!depth_tex->IsRenderTarget()) { LUA->ThrowError("provided depth texture is not a render target"); }
+	
+		int x = LUA->CheckNumber(3);
+		int y = LUA->CheckNumber(4);
+		int w = LUA->CheckNumber(5);
+		int h = LUA->CheckNumber(6);
+	
+		pRenderContext->PushRenderTargetAndViewport(color_tex, depth_tex, x, y, w, h);
+	
+		return 0;
+	}
+	
+	LUA_LIB_FUNCTION(shaderlib, PopRenderTargetAndViewport)
+	{
+		auto pMatRenderContext = g_pMaterialSystem->GetRenderContext();
+		pMatRenderContext->PopRenderTargetAndViewport();
+		return 0;
+	}
+
 	LUA_LIB_FUNCTION(shaderlib, CreateGeometryShader)
 	{
 		auto name = LUA->CheckString(1);
